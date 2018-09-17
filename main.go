@@ -23,5 +23,6 @@ func server(mode string, port int64) {
 }
 
 func main() {
-	server(gin.ReleaseMode, 10001)
+	getDirTree("G:/raid/youxin.357.com/logs")
+	// server(gin.ReleaseMode, 10001)
 }

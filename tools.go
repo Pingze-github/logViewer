@@ -7,6 +7,7 @@ import (
 	"github.com/Pingze-github/sift"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -108,4 +109,70 @@ func testSiftSearch() {
 	} else {
 		fmt.Println("执行错误", err)
 	}
+}
+
+type FileTreeNode struct {
+	root string
+	filePaths []string
+	dirPaths []string
+}
+
+var (
+	nodeChan chan *FileTreeNode
+)
+
+// TODO 关闭chan的时机
+
+func getDirTree(dirPath string)  {
+
+	nodeChan = make(chan *FileTreeNode, 1)
+
+	go getFileTreeNode(dirPath)
+
+	for node := range nodeChan {
+		fmt.Println(node.root)
+		for _, subDirPath := range(node.dirPaths) {
+			go getFileTreeNode(subDirPath)
+		}
+	}
+
+}
+
+func getFileTreeNode(dirPath string) {
+	filePaths, dirPaths, err := getDirContents(dirPath, 0)
+	if err != nil {
+		fmt.Println(err);
+		os.Exit(1)
+	}
+
+	nodeChan <- &FileTreeNode{
+		root: dirPath,
+		filePaths: filePaths,
+		dirPaths: dirPaths,
+	}
+
+	// close(nodeChan)
+}
+
+// 获取目录中的子目录和文件
+func getDirContents(dirPath string, limit int64) ([]string, []string, error) {
+	var filePaths []string
+	var subDirPaths []string
+	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", path, err)
+			return err
+		}
+		//if info.IsDir() && info.Name() == subDirToSkip {
+		//	fmt.Printf("skipping a dir without errors: %+v \n", info.Name())
+		//	return filepath.SkipDir
+		//}
+		if info.IsDir() && path != dirPath {
+			subDirPaths = append(subDirPaths, path)
+		} else {
+			filePaths = append(filePaths, path)
+		}
+		return nil
+	})
+	return filePaths, subDirPaths, err
 }
