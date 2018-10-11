@@ -59,7 +59,7 @@ func SearchFileWithPattern(ctx *gin.Context) {
 
 	// 避免搜索.时sift的异常阻塞
 	if pattern == "." {
-		pattern = ".*"
+		pattern = ".+"
 	}
 
 	cmd := fmt.Sprintf("-e %s %s -n --follow --binary-skip --limit=%d", pattern, filePath, sliceEnd)
