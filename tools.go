@@ -3,43 +3,73 @@ package main
 import (
 	"bufio"
 	"errors"
-	"fmt"
 	"github.com/Pingze-github/sift"
+	"github.com/gin-gonic/gin"
 	"io"
+	"io/ioutil"
 	"os"
-	"path/filepath"
 	"strings"
-	"time"
 )
 
+// 文件行
 type Line struct {
+	// 行号
 	lineno int64
+	// 内容
 	content string
 }
 
 // 执行sift命令（带超时限制）
-func ExecuteSiftCmdWithTimeout(cmd string, timeout int64) (sift.SearchResult, error) {
+// timeout为毫秒
+//func ExecuteSiftCmdWithTimeout(cmd string, timeout int64) (sift.SearchResult, error) {
+//	type SearchResultWithError struct {
+//		SearchResult sift.SearchResult
+//		err error
+//	}
+//
+//	ch := make(chan SearchResultWithError)
+//
+//	go func() {
+//		searchResult, err := sift.ExecuteSiftCmd(cmd, timeout)
+//		ch <- SearchResultWithError{searchResult, err}
+//	}()
+//
+//	select {
+//	case resultWithError := <-ch:
+//		return resultWithError.SearchResult, resultWithError.err
+//	case <-time.After(time.Millisecond * time.Duration(timeout)):
+//		return sift.SearchResult{}, errors.New(fmt.Sprintf("sift search timeout for %dms limit", timeout))
+//	}
+//}
 
-	type SearchResultWithError struct {
-		SearchResult sift.SearchResult
-		err error
+func results2H(results []*sift.Result) []gin.H {
+	var resultsH []gin.H
+	for _, result := range(results) {
+		resultsH = append(resultsH, gin.H{
+			"target": result.Target,
+			"matches": matches2H(result.Matches),
+		})
 	}
-
-	ch := make(chan SearchResultWithError)
-
-	go func() {
-		searchResult, err := sift.ExecuteSiftCmd(cmd)
-		ch <- SearchResultWithError{searchResult, err}
-	}()
-
-	select {
-	case resultWithError := <-ch:
-		return resultWithError.SearchResult, resultWithError.err
-	case <-time.After(time.Millisecond * time.Duration(timeout)):
-		return sift.SearchResult{}, errors.New(fmt.Sprintf("sift search timeout for %dms limit", timeout))
-	}
+	return resultsH
 }
 
+func matches2H(matches sift.Matches) []gin.H {
+	var resultsH []gin.H
+	for _, match := range(matches) {
+		resultsH = append(resultsH, gin.H{
+			"start": match.Start,
+			"end": match.End,
+			"lineStart": match.LineStart,
+			"lineEnd": match.LineEnd,
+			"match": match.Match,
+			"line": match.Line,
+			"lineno": match.Lineno,
+		})
+	}
+	return resultsH
+}
+
+// 获取文件的指定函数内容
 func getFileLines(filePath string, startLineno int64, endLineno int64) ([]*Line, error) {
 	var lines []*Line
 
@@ -78,101 +108,75 @@ func getFileLines(filePath string, startLineno int64, endLineno int64) ([]*Line,
 	return lines, nil
 }
 
-
-func testLinesRead() {
-	lines, err := getFileLines("G:/raid/youxin.357.com/logs/main/log20180830", 8000, 8600)
-	if err != nil {
-		panic(err)
+// 将文件行转化为gin.H数组
+func lines2Gin(lines []*Line) []gin.H {
+	var data []gin.H
+	for _, linePoint := range lines{
+		line := *linePoint
+		lineH := gin.H{
+			"lineno": line.lineno,
+			"content": line.content,
+		}
+		data = append(data, lineH)
 	}
-	fmt.Println(lines)
-	fmt.Println(len(lines))
-	fmt.Println(lines[0])
+	return data
 }
 
-func testSiftSearch() {
-	searchResult, err := ExecuteSiftCmdWithTimeout("-e sift main.go -n --follow", 15 * 1000)
+// 文件系统树节点
+type FileNode struct {
+	// 文件名
+	name string
+	// 文件路径
+	path string
+	// 是否为文件（否则为目录）（win中快捷方式视为文件）
+	isFile bool
+	// 子节点
+	children []*FileNode
+}
 
-	fmt.Println(123)
-
-	if err == nil {
-		for _, result := range(searchResult.Results) {
-			fmt.Println("这是一个文件的搜索结果：")
-			sift.PrintResult(result)
-			fmt.Println(result.Target)
-			for _, match := range(result.Matches) {
-				fmt.Println(match)
+// 递归获取文件系统树
+// TODO 支持linux软链接
+// 由于os.Readlink不支持win下快捷方式，不进行特别支持
+func getFileTree(dirPath string, limit int64) (FileNode, error) {
+	var nodeChildren []*FileNode
+	node := FileNode{name:dirPath, path:dirPath, isFile:false}
+	rd, err := ioutil.ReadDir(dirPath)
+	for _, fi := range rd {
+		fiName := fi.Name()
+		fiPath := dirPath + "/" + fiName
+		if fi.IsDir() {
+			fiNode, err := getFileTree(fiPath, limit)
+			if err != nil {
+				return node, err
 			}
-
-			fmt.Println(result.Matches[0])
-		}
-		fmt.Println("执行耗时", searchResult.TimeCost)
-	} else {
-		fmt.Println("执行错误", err)
-	}
-}
-
-type FileTreeNode struct {
-	root string
-	filePaths []string
-	dirPaths []string
-}
-
-var (
-	nodeChan chan *FileTreeNode
-)
-
-// TODO 关闭chan的时机
-
-func getDirTree(dirPath string)  {
-
-	nodeChan = make(chan *FileTreeNode, 1)
-
-	go getFileTreeNode(dirPath)
-
-	for node := range nodeChan {
-		fmt.Println(node.root)
-		for _, subDirPath := range(node.dirPaths) {
-			go getFileTreeNode(subDirPath)
-		}
-	}
-
-}
-
-func getFileTreeNode(dirPath string) {
-	filePaths, dirPaths, err := getDirContents(dirPath, 0)
-	if err != nil {
-		fmt.Println(err);
-		os.Exit(1)
-	}
-
-	nodeChan <- &FileTreeNode{
-		root: dirPath,
-		filePaths: filePaths,
-		dirPaths: dirPaths,
-	}
-
-	// close(nodeChan)
-}
-
-// 获取目录中的子目录和文件
-func getDirContents(dirPath string, limit int64) ([]string, []string, error) {
-	var filePaths []string
-	var subDirPaths []string
-	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", path, err)
-			return err
-		}
-		//if info.IsDir() && info.Name() == subDirToSkip {
-		//	fmt.Printf("skipping a dir without errors: %+v \n", info.Name())
-		//	return filepath.SkipDir
-		//}
-		if info.IsDir() && path != dirPath {
-			subDirPaths = append(subDirPaths, path)
+			nodeChildren = append(nodeChildren, &fiNode)
 		} else {
-			filePaths = append(filePaths, path)
+			fiNode := FileNode{name:fiName, path:fiPath, isFile:true}
+			nodeChildren = append(nodeChildren, &fiNode)
 		}
-		return nil
-	})
-	return filePaths, subDirPaths, err
+	}
+	node.children = nodeChildren
+	return node, err
+}
+
+// 将文件树转化为gin.H格式
+func FileNode2Gin(node FileNode) gin.H {
+	var nodeChildren []gin.H
+	for _, nodeChildPoint := range node.children{
+		nodeChild := *nodeChildPoint
+		ginNodeChild := gin.H{
+			"name": nodeChild.name,
+			"path": nodeChild.path,
+			"isFile": nodeChild.isFile,
+			"chidren": FileNode2Gin(nodeChild),
+		}
+		nodeChildren = append(nodeChildren, ginNodeChild)
+	}
+
+	return gin.H{
+		"name": node.name,
+		"path": node.path,
+		"isFile": node.isFile,
+		"chidren": nodeChildren,
+	}
 }
